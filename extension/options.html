@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Hermes Link Bridge — Options</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+    label { display: block; margin-bottom: 0.5rem; font-weight: 600; }
+    input[type=text] { width: 100%; padding: 0.5rem; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+    .status { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; font-size: 0.9rem; display: none; }
+    .status.ok   { background: #e8f5e9; color: #2e7d32; display: block; }
+    .status.err  { background: #ffebee; color: #c62828; display: block; }
+    details { margin-top: 1.5rem; }
+    summary { cursor: pointer; font-weight: 600; }
+    code   { background: #f5f5f5; padding: 0.1em 0.3em; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <h1>Hermes Link Bridge</h1>
+  <p>Sends right-clicked link URLs to a local bridge server, which runs a shell command.</p>
+
+  <label for="gatewayUrl">Bridge Server Address</label>
+  <input type="text" id="gatewayUrl" placeholder="http://127.0.0.1:6380">
+
+  <div class="status" id="status"></div>
+
+  <details>
+    <summary>How it works (click to expand)</summary>
+    <ol>
+      <li>Start the bridge server:<br>
+        <code>python3 /path/to/bridge_server.py</code>
+      </li>
+      <li>This extension adds <strong>"Send to Terminal"</strong> to the right-click menu on links.</li>
+      <li>When you click it, the link URL is POSTed to the bridge server.</li>
+      <li>The server runs whatever command you configured (via <code>HERMES_LINK_COMMAND</code>)</li>
+    </ol>
+    <p><strong>Example:</strong> Save links to a file</p>
+    <pre>HERMES_LINK_COMMAND='echo %s >> ~/links.txt' python3 bridge_server.py</pre>
+    <p><strong>Example:</strong> Open link in curl and pipe output to less</p>
+    <pre>HERMES_LINK_COMMAND='curl -sL %s | head -50' python3 bridge_server.py</pre>
+  </details>
+
+  <script src="options.js"></script>
+</body>
+</html>

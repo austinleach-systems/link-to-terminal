@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Hermes Link Bridge",
+  "version": "1.0.0",
+  "description": "Right-click any link to send its URL to a local terminal command via the Hermes bridge server.",
+  "permissions": ["contextMenus"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {},
+  "options_page": "options.html"
+}
