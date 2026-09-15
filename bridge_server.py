@@ -34,10 +34,58 @@ COMMAND = os.environ.get(
 LOG_DIR = os.path.expanduser("~/.hermes/link_bridge")
 LOG_FILE = os.path.join(LOG_DIR, "links.log")
 
+# ── Single-slot FIFO executor ───────────────────────────────────────
+import queue as _queue_mod
+
+url_fifo: _queue_mod.SimpleQueue[str] = _queue_mod.SimpleQueue()
+
+
+def register_queued(url: str):
+    """Mark a URL as queued in ACTIVE_PROCESSES."""
+    with _processes_lock:
+        ACTIVE_PROCESSES[f"queued:{id('')}{len(ACTIVE_PROCESSES)}"] = {
+            "pid": -1,
+            "url": url,
+            "command": COMMAND.split()[0] if COMMAND else "?",
+            "started": datetime.now(timezone.utc).isoformat(),
+            "status": "queued",
+        }
+
+
+def worker():
+    """Single-slot executor that pulls from the FIFO queue one at a time."""
+    while True:
+        url = url_fifo.get()  # Blocks until URL available
+        try:
+            handle_url(url)
+        finally:
+            pass  # Next loop iteration blocks on next get()
+
+
+_executor_thread = threading.Thread(target=worker, daemon=True)
+_executor_thread.start()
+
 # ── Active process registry ────────────────────────────────────────
 # Maps pid → {pid, url, command, started, exit_code}
 ACTIVE_PROCESSES = {}
 _processes_lock = threading.Lock()
+
+
+def promote_queued(url: str, pid: int):
+    """Find the synthetic 'queued:' slot for this URL and upgrade it to running."""
+    with _processes_lock:
+        key = None
+        rec  = None
+        for k, v in ACTIVE_PROCESSES.items():
+            if v["url"] == url and v["status"] == "queued":
+                key, rec = k, v
+                break
+        if rec is not None:
+            del ACTIVE_PROCESSES[key]
+            rec["pid"]     = pid
+            rec["status"]  = "running"
+            rec["promoted"]= datetime.now(timezone.utc).isoformat()
+            ACTIVE_PROCESSES[pid] = rec
 
 
 def register_process(pid: int, url: str, command: str):
@@ -54,38 +102,57 @@ def register_process(pid: int, url: str, command: str):
 def finish_process(pid: int, exit_code: Optional[int]):
     with _processes_lock:
         rec = ACTIVE_PROCESSES.get(pid)
-        if rec:
+        if rec is not None:
             rec["exit_code"] = exit_code
             rec["status"] = "done" if (exit_code or 0) == 0 else "error"
 
 
 def snapshot_processes():
-    """Return a list of running + recently finished processes, sorted newest first."""
+    """Return the queue snapshot: position + running record + queued list."""
     with _processes_lock:
-        now = datetime.now(timezone.utc)
-        result = []
-        for rec in ACTIVE_PROCESSES.values():
-            age = (now - datetime.fromisoformat(rec["started"])).total_seconds()
-            record = {**rec}
-            rec_conds = int(age)
-            if record["status"] == "running":
-                record["runtime"] = f"{rec_conds}s"
-            else:
-                record["age"] = f"{rec_conds}s ago"
-            result.append(record)
+        now      = datetime.now(timezone.utc)
+        running  = [(k,v) for k,v in ACTIVE_PROCESSES.items() if v["status"]=="running"]
+        queued   = [(k,v) for k,v in ACTIVE_PROCESSES.items() if v["status"]=="queued"]
+        errors   = [(k,v) for k,v in ACTIVE_PROCESSES.items() if v["status"]=="error"]
 
-        # Prune: remove successful completed entries immediately, keep errors for 30 min
+        # Prune: remove successful completions immediately, keep errors for 30m, queued forever
         cutoff = now - timedelta(minutes=30)
-        pruned_ids = [
-            pid for pid, r in ACTIVE_PROCESSES.items()
-            if r["status"] != "running" and (
-                r["status"] == "done" or datetime.fromisoformat(r["started"]) < cutoff
-            )
-        ]
-        for pid in pruned_ids:
-            del ACTIVE_PROCESSES[pid]
+        pruned = [
+            pid for pid, r in errors
+            if datetime.fromisoformat(r.get("started", now.isoformat())) < cutoff or
+               datetime.fromisoformat(
+                   r.get("promoted", r["started"])) < cutoff]
 
-        return sorted(result, key=lambda x: x["started"], reverse=True)
+        result_records: list[dict[str, object]] = []
+        for i, (pid, rec) in enumerate(running):
+            record = {**rec}
+            start_ts = datetime.fromisoformat(rec.get("promoted", rec["started"]))
+            age  = (now - start_ts).total_seconds()
+            record["runtime"]      = f"{int(age)}s"
+            result_records.append(record)
+
+        for i, (pid, rec) in enumerate(queued):
+            record = {**rec}
+            record["queue_position"] = i + 1
+            result_records.append(record)
+
+        # Prune stale errors (older than cutoff)
+        for pid in pruned:
+            ACTIVE_PROCESSES.pop(pid, None)
+
+        for _, rec in errors:
+            result_records.append({**rec})
+
+    # Compute total queue depth (running + queued)
+    with _processes_lock:
+        queue_depth = sum(1 for v in ACTIVE_PROCESSES.values()
+                          if v["status"] in ("running", "queued"))
+
+    return {
+        "count": len(result_records),
+        "queue_depth": queue_depth,
+        "data": result_records,
+    }
 
 
 # ── Live stream echo helpers ──────────────────────────────────────
@@ -113,7 +180,7 @@ def handle_url(url: str):
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            register_process(proc.pid, url, COMMAND.split()[0])
+            promote_queued(url, proc.pid)  # Upgrade queued → running with real PID
 
             # Spawn threads that print each line to the terminal AS IT ARRIVES
             out_thread = threading.Thread(target=_echo_stream, args=(proc.stdout, "out"))
@@ -168,24 +235,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         print(f"← POST received: {url}", flush=True)
 
-        # Fire-and-forget: run the command in a background thread so we can
-        # return instantly. Without this, gdl downloads >30s cause Chrome's
-        # MV3 fetch to timeout → BrokenPipeError before we write the response.
-        threading.Thread(target=handle_url, args=(url,), daemon=True).start()
-        self._respond(200, {"status": "queued", "url": url})
+        # Push onto the FIFO — the worker thread executes one at a time
+        queued_before = url_fifo.qsize()
+        url_fifo.put(url)
+        if COMMAND:
+            register_queued(url)
+
+        position = queued_before + 1
+        print(f"→ Queued (position {position})\n", flush=True)
+        self._respond(200, {
+            "status": "running" if position == 1 else "queued",
+            "url": url,
+            "queue_position": position,
+        })
 
     def do_GET(self):
         # Health-check + read log
         if self.path == "/healthz":
             self._respond(200, {"status": "ok"})
         elif self.path == "/processes":
-            procs = snapshot_processes()
-            running = sum(1 for p in procs if p["status"] == "running")
-            self._respond(200, {
-                "count": len(procs),
-                "running": running,
-                "processes": procs,
-            })
+            self._respond(200, snapshot_processes())
         elif self.path.startswith("/log"):
             try:
                 with open(LOG_FILE) as f:

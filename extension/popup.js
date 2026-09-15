@@ -6,111 +6,75 @@ const DEFAULT_URL  = "http://127.0.0.1:6380";
 let refreshTimer  = null;
 
 async function loadGateway() {
-  const stored = (await chrome.storage.local.get(GATEWAY_KEY))[GATEWAY_KEY];
-  return new URL(stored || DEFAULT_URL).origin;
+  return (await chrome.storage.local.get(GATEWAY_KEY))[GATEWAY_KEY] || DEFAULT_URL;
 }
 
-async function fetchProcesses() {
+function fmtURL(u) {
+  try { return new URL(u).host.split(".")[0].slice(0, 24); }
+  catch { return u.slice(0, 36); }
+}
+
+async function render() {
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+
   try {
     const gw   = await loadGateway();
     const resp = await fetch(`${gw}/processes`, {signal: AbortSignal.timeout(3000)});
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    return await resp.json();
+    data = await resp.json();
   } catch (err) {
-    document.getElementById("list").innerHTML =
-      `<div class="empty">⚠ Could not reach server<br><small>${err.message}</small></div>`;
-    return null;
-  }
-}
-
-async function retryUrl(url) {
-  try {
-    const gw   = await loadGateway();
-    await fetch(`${gw}/`, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({url}),
-      signal: AbortSignal.timeout(5000),
-    });
-    // Refresh the list immediately so the retried job shows up
-    await tick();
-  } catch (err) {
-    console.error("Retry failed:", err);
-  }
-}
-
-function escHtml(str) {
-  const d = document.createElement("div");
-  d.textContent = str;
-  return d.innerHTML;
-}
-
-function fmtDuration(s) {
-  if (!Number.isFinite(s)) return "…";
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
-}
-
-function render(list, data) {
-  if (!data || !data.processes.length) {
-    list.innerHTML = `<div class="empty">${data?.running === 0 ? "No active downloads" : "— no processes —"}</div>`;
+    list.innerHTML = `<div class="row error">⚠ Unreachable</div>`;
     return;
   }
 
-  const fragment = document.createDocumentFragment();
-  for (const p of data.processes) {
-    const bar = document.createElement("div");
-    bar.className = "bar";
+  const items = data.data || [];
+  const depth = data.queue_depth ?? 0;
 
-    const dot   = document.createElement("span");
-    dot.className = `dot ${p.status}`;
+  if (!items.length && !depth) {
+    list.innerHTML = `<div class="row empty">No active queue</div>`;
+    return;
+  }
 
-    const urlEl = document.createElement("span");
-    urlEl.className = "url";
-    urlEl.title = p.url;
-    urlEl.textContent = p.url;
+  for (const item of items) {
+    const row = document.createElement("div");
+    if (item.status === "running") {
+      row.className = "row";
+      row.innerHTML = `<span class="dot running"></span>${fmtURL(item.url)}<br><small>running ${item.runtime}</small>`;
+    } else if (item.status === "queued") {
+      row.className = "row queued-row";
+      row.innerHTML = `<span class="dot queued"></span>#${item.queue_position} ${fmtURL(item.url)}<br><small>in queue</small>`;
+    } else { /* error */
+      row.className = "row error";
+      const age = item.promoted || item.started ? (Date.now() / 1000 - Date.parse(item.promoted || item.started)) : "?";
+      row.innerHTML = `<span class="dot error"></span>${fmtURL(item.url)}<br><small>exit ${item.exit_code ?? "?"} · ${Math.floor(age)}s</small>`;
 
-    const meta = document.createElement("span");
-    meta.className = "meta";
-    meta.textContent = p.status === "running" ? fmtDuration(p.runtime) : p.age;
-
-    bar.append(dot, urlEl, meta);
-
-    // Error items get a Retry button
-    if (p.status === "error") {
       const btn = document.createElement("button");
       btn.className = "retry-btn";
       btn.textContent = "↻ Retry";
-      btn.title = p.url;
-      btn.addEventListener("click", async () => retryUrl(p.url));
-      bar.appendChild(btn);
+      btn.onclick = () => retryURL(gw, item.url);
+      row.appendChild(btn);
     }
-
-    fragment.appendChild(bar);
+    list.appendChild(row);
   }
-
-  list.innerHTML = "";
-  list.appendChild(fragment);
 }
 
-async function tick() {
-  const data = await fetchProcesses();
-  render(document.getElementById("list"), data);
+// ── Retry via same POST path as context-menu click ───────────────
+
+async function retryURL(gateway, url) {
+  fetch(`${gateway}`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({url})
+  });
 }
 
-// Refresh button
-document.querySelector("#refresh").addEventListener("click", tick);
+// ── Lifecycle ────────────────────────────────────────────────────
 
-// Auto-refresh every 4 s while popup is open
-function scheduleRefresh() {
-  refreshTimer = setTimeout(() => { tick(); scheduleRefresh(); }, 4000);
-}
+document.addEventListener("DOMContentLoaded", () => {
+  refreshTimer = setInterval(render, 4000);
+  render(); // initial load
+});
 
-async function init() {
-  await tick();
-  scheduleRefresh();
-}
-
-chrome.runtime.onSuspend.addListener(() => clearTimeout(refreshTimer));
-init();
+// Kill the interval when popup closes to avoid leaking service-worker tasks
+window.addEventListener("unload", () => { clearInterval(refreshTimer); });
