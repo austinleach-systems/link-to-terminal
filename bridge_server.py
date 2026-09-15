@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import urllib.request
 from datetime import datetime, timezone
 
@@ -31,6 +32,13 @@ COMMAND = os.environ.get(
 
 LOG_DIR = os.path.expanduser("~/.hermes/link_bridge")
 LOG_FILE = os.path.join(LOG_DIR, "links.log")
+
+
+def _consume_stream(stream, lines_list):
+    """Read a stream line-by-line and collect into lines_list."""
+    for line in iter(stream.readline, ""):
+        if line:
+            lines_list.append(line)
 
 
 def handle_url(url: str):
@@ -46,26 +54,32 @@ def handle_url(url: str):
                 text=True,
             )
 
-            full_out_lines = []
-            full_err_lines = []
+            full_out = []
+            full_err = []
 
-            # Stream stdout line-by-line, echo live to the terminal running this server
-            for line in proc.stdout:
+            # Read both streams concurrently so neither blocks
+            out_thread = threading.Thread(target=_consume_stream, args=(proc.stdout, full_out))
+            err_thread = threading.Thread(target=_consume_stream, args=(proc.stderr, full_err))
+            out_thread.start()
+            err_thread.start()
+
+            exit_code = proc.wait()
+
+            # Now both threads have collected everything — print it live
+            for line in full_out:
                 print(line, end="", flush=True)
-                full_out_lines.append(line.rstrip())
-
-            # Also stream stderr so you see errors live
-            for line in proc.stderr:
+            for line in full_err:
                 sys.stderr.write(line)
                 sys.stderr.flush()
-                full_err_lines.append(line.rstrip())
 
-            exit_code = proc.returncode if proc.returncode is not None else 0
+            out_thread.join(timeout=2)
+            err_thread.join(timeout=2)
+
             return {
                 "status": "ran",
                 "exit_code": exit_code,
-                "output_lines": len(full_out_lines),
-                "error_lines": len(full_err_lines),
+                "output_lines": len(full_out),
+                "error_lines": len(full_err),
             }
         except Exception as exc:
             return {"status": "error", "detail": str(exc)}
