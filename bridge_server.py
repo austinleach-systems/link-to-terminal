@@ -20,8 +20,9 @@ import os
 import subprocess
 import sys
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from socketserver import ThreadingMixIn
+from typing import Optional
 
 LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = int(os.environ.get("HERMES_LINK_PORT", 6380))
@@ -32,6 +33,57 @@ COMMAND = os.environ.get(
 
 LOG_DIR = os.path.expanduser("~/.hermes/link_bridge")
 LOG_FILE = os.path.join(LOG_DIR, "links.log")
+
+# ── Active process registry ────────────────────────────────────────
+# Maps pid → {pid, url, command, started, exit_code}
+ACTIVE_PROCESSES = {}
+_processes_lock = threading.Lock()
+
+
+def register_process(pid: int, url: str, command: str):
+    with _processes_lock:
+        ACTIVE_PROCESSES[pid] = {
+            "pid": pid,
+            "url": url,
+            "command": command.split()[0] if " " in command else command,
+            "started": datetime.now(timezone.utc).isoformat(),
+            "status": "running",
+        }
+
+
+def finish_process(pid: int, exit_code: Optional[int]):
+    with _processes_lock:
+        rec = ACTIVE_PROCESSES.get(pid)
+        if rec:
+            rec["exit_code"] = exit_code
+            rec["status"] = "done" if (exit_code or 0) == 0 else "error"
+
+
+def snapshot_processes():
+    """Return a list of running + recently finished processes, sorted newest first."""
+    with _processes_lock:
+        now = datetime.now(timezone.utc)
+        result = []
+        for rec in ACTIVE_PROCESSES.values():
+            age = (now - datetime.fromisoformat(rec["started"])).total_seconds()
+            record = {**rec}
+            rec_conds = int(age)
+            if record["status"] == "running":
+                record["runtime"] = f"{rec_conds}s"
+            else:
+                record["age"] = f"{rec_conds}s ago"
+            result.append(record)
+
+        # Prune entries older than 30 minutes that aren't running
+        cutoff = now - timedelta(minutes=30)
+        pruned_ids = [
+            pid for pid, r in ACTIVE_PROCESSES.items()
+            if r["status"] != "running" and datetime.fromisoformat(r["started"]) < cutoff
+        ]
+        for pid in pruned_ids:
+            del ACTIVE_PROCESSES[pid]
+
+        return sorted(result, key=lambda x: x["started"], reverse=True)
 
 
 # ── Live stream echo helpers ──────────────────────────────────────
@@ -51,6 +103,7 @@ def handle_url(url: str):
         shell_cmd = COMMAND.replace("%s", f"'{url}'", 1)
         print(f"\n▶ {shell_cmd}\n", flush=True)
 
+        proc = None
         try:
             proc = subprocess.Popen(
                 shell_cmd, shell=True,
@@ -58,6 +111,7 @@ def handle_url(url: str):
                 stderr=subprocess.PIPE,
                 text=True,
             )
+            register_process(proc.pid, url, COMMAND.split()[0])
 
             # Spawn threads that print each line to the terminal AS IT ARRIVES
             out_thread = threading.Thread(target=_echo_stream, args=(proc.stdout, "out"))
@@ -68,6 +122,8 @@ def handle_url(url: str):
             exit_code = proc.wait()
             out_thread.join(timeout=3)
             err_thread.join(timeout=3)
+
+            finish_process(proc.pid, exit_code)
 
             print(f"✔ Exited with code {exit_code}\n", flush=True)
 
@@ -120,6 +176,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # Health-check + read log
         if self.path == "/healthz":
             self._respond(200, {"status": "ok"})
+        elif self.path == "/processes":
+            procs = snapshot_processes()
+            running = sum(1 for p in procs if p["status"] == "running")
+            self._respond(200, {
+                "count": len(procs),
+                "running": running,
+                "processes": procs,
+            })
         elif self.path.startswith("/log"):
             try:
                 with open(LOG_FILE) as f:

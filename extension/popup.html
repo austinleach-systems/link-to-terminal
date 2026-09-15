@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Hermes — Active Processes</title>
+<style>
+  body { font: 12px/1.4 system-ui,sans-serif; margin:0; padding:10px 12px; min-width:300px; }
+  h1   { font-size:14px; margin:2px 0 8px; }
+  .bar  { display:flex; align-items:center; gap:6px; padding:3px 0; border-bottom:1px solid #eee; }
+  .dot  { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+  .run  { background:#4c8; }       .done { background:#8c6; }    .err  { background:#e55; }
+  .url  { max-width:230px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:#3182ce; }
+  .meta { color:#666; font-size:11px; margin-left:auto; white-space:nowrap; }
+  .empty{ padding:14px 0; text-align:center; color:#999; }
+  button{background:#3b82f6;color:#fff;border:none;border-radius:4px;padding:5px 10px;cursor:pointer;font-size:11px}
+  button:hover{opacity:.9}
+  .controls {display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+</style>
+</head>
+<body>
+<div class="controls">
+  <h1>Active Processes</h1>
+  <button id="refresh" title="Refresh">&#x21bb;</button>
+</div>
+<div id="list"></div>
+<script src="popup.js"></script>
+</body>
+</html>
