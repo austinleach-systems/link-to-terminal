@@ -18,7 +18,6 @@ import http.server
 import json
 import os
 import subprocess
-import shutil
 import sys
 import urllib.request
 from datetime import datetime, timezone
@@ -40,17 +39,36 @@ def handle_url(url: str):
     if COMMAND:
         shell_cmd = COMMAND.replace("%s", url, 1)
         try:
-            result = subprocess.run(
-                shell_cmd, shell=True, capture_output=True, text=True, timeout=30
+            proc = subprocess.Popen(
+                shell_cmd, shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
             )
+
+            full_out_lines = []
+            full_err_lines = []
+
+            # Stream stdout line-by-line, echo live to the terminal running this server
+            for line in proc.stdout:
+                print(line, end="", flush=True)
+                full_out_lines.append(line.rstrip())
+
+            # Also stream stderr so you see errors live
+            for line in proc.stderr:
+                sys.stderr.write(line)
+                sys.stderr.flush()
+                full_err_lines.append(line.rstrip())
+
+            exit_code = proc.returncode if proc.returncode is not None else 0
             return {
                 "status": "ran",
-                "exit_code": result.returncode,
-                "stdout": result.stdout.strip(),
-                "stderr": result.stderr.strip() if result.stderr else None,
+                "exit_code": exit_code,
+                "output_lines": len(full_out_lines),
+                "error_lines": len(full_err_lines),
             }
-        except subprocess.TimeoutExpired:
-            return {"status": "error", "detail": "Command timed out after 30s"}
+        except Exception as exc:
+            return {"status": "error", "detail": str(exc)}
     else:
         # Default behaviour: append timestamped URL to log file
         os.makedirs(LOG_DIR, exist_ok=True)
