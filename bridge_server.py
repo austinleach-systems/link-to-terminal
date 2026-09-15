@@ -74,11 +74,13 @@ def snapshot_processes():
                 record["age"] = f"{rec_conds}s ago"
             result.append(record)
 
-        # Prune entries older than 30 minutes that aren't running
+        # Prune: remove successful completed entries immediately, keep errors for 30 min
         cutoff = now - timedelta(minutes=30)
         pruned_ids = [
             pid for pid, r in ACTIVE_PROCESSES.items()
-            if r["status"] != "running" and datetime.fromisoformat(r["started"]) < cutoff
+            if r["status"] != "running" and (
+                r["status"] == "done" or datetime.fromisoformat(r["started"]) < cutoff
+            )
         ]
         for pid in pruned_ids:
             del ACTIVE_PROCESSES[pid]
