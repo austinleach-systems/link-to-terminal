@@ -34,14 +34,50 @@ COMMAND = os.environ.get(
 LOG_DIR = os.path.expanduser("~/.hermes/link_bridge")
 LOG_FILE = os.path.join(LOG_DIR, "links.log")
 
-# ── Single-slot FIFO executor ───────────────────────────────────────
+# ── Per-origin FIFO executor ────────────────────────────────────────
 import queue as _queue_mod
+from urllib.parse import urlparse
 
-url_fifo: _queue_mod.SimpleQueue[str] = _queue_mod.SimpleQueue()
+_origin_queues: dict[str, _queue_mod.SimpleQueue] = {}        # origin → Queue
+_origin_workers: dict[str, threading.Thread]       = {}        # origin → daemon thread
+_origin_lock   = threading.Lock()                   # guards the dicts above
+
+
+def _get_or_create_origin(url: str):
+    """Derive a stable origin key from a URL (e.g. 'https://abc.com')."""
+    try:
+        u  = urlparse(url)
+        return u.scheme + "://" + u.netloc
+    except Exception:
+        return "unknown"
+
+
+def _ensure_worker(origin: str):
+    """If this origin has no worker thread+queue yet, create them."""
+    with _origin_lock:
+        if origin in _origin_queues:
+            return           # already exists
+        q       = _queue_mod.SimpleQueue()
+        _origin_queues[origin] = q
+        t       = threading.Thread(
+            target=_origin_worker_loop, args=(origin, q), daemon=True)
+        _origin_workers[origin] = t
+        t.start()
+        print(f"  [worker started for {origin}]", flush=True)
+
+
+def _origin_worker_loop(origin: str, q: _queue_mod.SimpleQueue):
+    """Single-slot loop: pulls URLs from *this* origin's queue one at a time."""
+    while True:
+        url = q.get()   # blocks until a URL arrives
+        try:
+            handle_url(url)
+        finally:
+            pass
 
 
 def register_queued(url: str):
-    """Mark a URL as queued in ACTIVE_PROCESSES."""
+    """Mark a URL as queued in ACTIVE_PROCESSES (keyed by origin-safe synthetic id)."""
     with _processes_lock:
         ACTIVE_PROCESSES[f"queued:{id('')}{len(ACTIVE_PROCESSES)}"] = {
             "pid": -1,
@@ -50,20 +86,6 @@ def register_queued(url: str):
             "started": datetime.now(timezone.utc).isoformat(),
             "status": "queued",
         }
-
-
-def worker():
-    """Single-slot executor that pulls from the FIFO queue one at a time."""
-    while True:
-        url = url_fifo.get()  # Blocks until URL available
-        try:
-            handle_url(url)
-        finally:
-            pass  # Next loop iteration blocks on next get()
-
-
-_executor_thread = threading.Thread(target=worker, daemon=True)
-_executor_thread.start()
 
 # ── Active process registry ────────────────────────────────────────
 # Maps pid → {pid, url, command, started, exit_code}
@@ -129,11 +151,15 @@ def snapshot_processes():
             start_ts = datetime.fromisoformat(rec.get("promoted", rec["started"]))
             age  = (now - start_ts).total_seconds()
             record["runtime"]      = f"{int(age)}s"
+            record["origin"]       = _get_or_create_origin(record.get("url", ""))
             result_records.append(record)
 
         for i, (pid, rec) in enumerate(queued):
             record = {**rec}
             record["queue_position"] = i + 1
+            record["origin"]         = _get_or_create_origin(record.get("url", ""))
+            if "promoted" not in record:
+                record["started2"] = now.isoformat()  # compat sentinel
             result_records.append(record)
 
         # Prune stale errors (older than cutoff)
@@ -141,7 +167,9 @@ def snapshot_processes():
             ACTIVE_PROCESSES.pop(pid, None)
 
         for _, rec in errors:
-            result_records.append({**rec})
+            rr = {**rec}
+            rr["origin"] = _get_or_create_origin(rec.get("url", ""))
+            result_records.append(rr)
 
     # Compute total queue depth (running + queued)
     with _processes_lock:
@@ -235,18 +263,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         print(f"← POST received: {url}", flush=True)
 
-        # Push onto the FIFO — the worker thread executes one at a time
-        queued_before = url_fifo.qsize()
-        url_fifo.put(url)
+        origin = _get_or_create_origin(url)
+        _ensure_worker(origin)          # lazily spawn worker+queue if first ever use
+        q = _origin_queues[origin]
+        queued_before = q.qsize()       # items *ahead* of this one for same origin
+        q.put(url)
+
         if COMMAND:
             register_queued(url)
 
         position = queued_before + 1
-        print(f"→ Queued (position {position})\n", flush=True)
+        print(f"→ {origin}: Queued #{position}\n", flush=True)
         self._respond(200, {
             "status": "running" if position == 1 else "queued",
             "url": url,
             "queue_position": position,
+            "origin": origin,
         })
 
     def do_GET(self):
