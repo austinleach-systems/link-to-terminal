@@ -48,7 +48,7 @@ def handle_url(url: str):
     """Process an incoming URL — run the command or log it."""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if COMMAND:
-        shell_cmd = COMMAND.replace("%s", url, 1)
+        shell_cmd = COMMAND.replace("%s", f"'{url}'", 1)
         print(f"\n▶ {shell_cmd}\n", flush=True)
 
         try:
