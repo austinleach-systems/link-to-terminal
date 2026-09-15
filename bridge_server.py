@@ -20,8 +20,8 @@ import os
 import subprocess
 import sys
 import threading
-import urllib.request
 from datetime import datetime, timezone
+from socketserver import ThreadingMixIn
 
 LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = int(os.environ.get("HERMES_LINK_PORT", 6380))
@@ -34,11 +34,14 @@ LOG_DIR = os.path.expanduser("~/.hermes/link_bridge")
 LOG_FILE = os.path.join(LOG_DIR, "links.log")
 
 
-def _consume_stream(stream, lines_list):
-    """Read a stream line-by-line and collect into lines_list."""
+# ── Live stream echo helpers ──────────────────────────────────────
+
+def _echo_stream(stream, label):
+    """Read a subprocess stream line-by-line and print to terminal LIVE as each line arrives."""
     for line in iter(stream.readline, ""):
-        if line:
-            lines_list.append(line)
+        prefix = f"[{label}] " if label else ""
+        sys.stdout.write(f"{prefix}{line}")
+        sys.stdout.flush()
 
 
 def handle_url(url: str):
@@ -46,6 +49,8 @@ def handle_url(url: str):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if COMMAND:
         shell_cmd = COMMAND.replace("%s", url, 1)
+        print(f"\n▶ {shell_cmd}\n", flush=True)
+
         try:
             proc = subprocess.Popen(
                 shell_cmd, shell=True,
@@ -54,41 +59,38 @@ def handle_url(url: str):
                 text=True,
             )
 
-            full_out = []
-            full_err = []
-
-            # Read both streams concurrently so neither blocks
-            out_thread = threading.Thread(target=_consume_stream, args=(proc.stdout, full_out))
-            err_thread = threading.Thread(target=_consume_stream, args=(proc.stderr, full_err))
+            # Spawn threads that print each line to the terminal AS IT ARRIVES
+            out_thread = threading.Thread(target=_echo_stream, args=(proc.stdout, "out"))
+            err_thread = threading.Thread(target=_echo_stream, args=(proc.stderr, "err"))
             out_thread.start()
             err_thread.start()
 
             exit_code = proc.wait()
+            out_thread.join(timeout=3)
+            err_thread.join(timeout=3)
 
-            # Now both threads have collected everything — print it live
-            for line in full_out:
-                print(line, end="", flush=True)
-            for line in full_err:
-                sys.stderr.write(line)
-                sys.stderr.flush()
-
-            out_thread.join(timeout=2)
-            err_thread.join(timeout=2)
+            print(f"✔ Exited with code {exit_code}\n", flush=True)
 
             return {
                 "status": "ran",
                 "exit_code": exit_code,
-                "output_lines": len(full_out),
-                "error_lines": len(full_err),
             }
         except Exception as exc:
+            print(f"✘ Error: {exc}", flush=True)
             return {"status": "error", "detail": str(exc)}
     else:
-        # Default behaviour: append timestamped URL to log file
+        # Default behaviour: append timestamped URL to log file (ensure dir exists)
         os.makedirs(LOG_DIR, exist_ok=True)
-        with open(LOG_FILE, "a") as f:
-            f.write(f"{ts}\t{url}\n")
-        return {"status": "logged", "log_file": LOG_FILE}
+        try:
+            with open(LOG_FILE, "a") as f:
+                f.write(f"{ts}\t{url}\n")
+            return {"status": "logged", "log_file": LOG_FILE}
+        except FileNotFoundError:
+            return {
+                "status": "logged_partial",
+                "detail": "URL received but log file not writable",
+                "url": url,
+            }
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -106,6 +108,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._respond(400, {"error": "No URL provided"})
             return
 
+        print(f"← POST received: {url}", flush=True)
         result = handle_url(url)
         self._respond(200, {**result, "url": url})
 
@@ -137,8 +140,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class ThreadedHTTPServer(ThreadingMixIn, http.server.HTTPServer):
+    """Handle each HTTP request in its own thread so long-running gdl doesn't block the extension."""
+    daemon_threads = True
+
+
 if __name__ == "__main__":
-    server = http.server.HTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
+    server = ThreadedHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
     print(
         f"✓ hermes-link-bridge listening on {LISTEN_HOST}:{LISTEN_PORT}\n"
         f"  Send: curl -X POST http://{LISTEN_HOST}:{LISTEN_PORT} "
