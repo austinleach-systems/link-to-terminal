@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "Right-click any link to send its URL to a local terminal command via the Hermes bridge server.",
   "permissions": ["contextMenus", "alarms", "notifications", "storage", "activeTab"],
+  "host_permissions": ["http://127.0.0.1:<port>/", "http://localhost:<port>/"],
   "background": {
     "service_worker": "background.js"
   },
