@@ -146,6 +146,12 @@ class ThreadedHTTPServer(ThreadingMixIn, http.server.HTTPServer):
 
 
 if __name__ == "__main__":
+    # Ensure log dir and file exist at startup
+    os.makedirs(LOG_DIR, exist_ok=True)
+    if not os.path.exists(LOG_FILE):
+        open(LOG_FILE, "a").close()
+        print(f"  Created log file: {LOG_FILE}")
+
     server = ThreadedHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
     print(
         f"✓ hermes-link-bridge listening on {LISTEN_HOST}:{LISTEN_PORT}\n"
