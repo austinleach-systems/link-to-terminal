@@ -3,10 +3,13 @@
   "name": "Hermes Link Bridge",
   "version": "1.0.0",
   "description": "Right-click any link to send its URL to a local terminal command via the Hermes bridge server.",
-  "permissions": ["contextMenus"],
+  "permissions": ["contextMenus", "alarms", "notifications", "storage", "activeTab"],
   "background": {
     "service_worker": "background.js"
   },
-  "icons": {},
-  "options_page": "options.html"
+  "action": {},
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
 }

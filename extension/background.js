@@ -2,14 +2,36 @@
 const GATEWAY_URL_KEY = "hermes_gateway_url";
 const DEFAULT_GATEWAY = "http://127.0.0.1:6380";
 
-// Create the context menu on install
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: "send_to_hermes",
-    title: "Send to Terminal",
-    contexts: ["link"],
+function createContextMenu() {
+  // Remove any stale menus before recreating (prevents duplicates on reload)
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: "send_to_hermes",
+      title: "Send to Terminal",
+      contexts: ["link"],
+    });
   });
+}
+
+// Create the context menu whenever the service worker activates (MV3)
+chrome.runtime.onStartup.addListener(createContextMenu);
+
+// Also on install/update — covers first load only
+chrome.runtime.onInstalled.addListener(() => {
+  // Delay slightly so MV3 scheduler can finish booting
+  setTimeout(createContextMenu, 1000);
 });
+
+// Re-create after any wake-up (MV3 service workers sleep and wake)
+chrome.alarms.create("wakeUp", { when: Date.now() + 500 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "wakeUp") {
+    createContextMenu();
+  }
+});
+
+// Keep service worker alive so menus stay registered
+setInterval(() => {}, 60000);
 
 // When the user selects our menu item
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
