@@ -109,8 +109,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         print(f"← POST received: {url}", flush=True)
-        result = handle_url(url)
-        self._respond(200, {**result, "url": url})
+
+        # Fire-and-forget: run the command in a background thread so we can
+        # return instantly. Without this, gdl downloads >30s cause Chrome's
+        # MV3 fetch to timeout → BrokenPipeError before we write the response.
+        threading.Thread(target=handle_url, args=(url,), daemon=True).start()
+        self._respond(200, {"status": "queued", "url": url})
 
     def do_GET(self):
         # Health-check + read log
@@ -135,12 +139,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Length", str(len(resp)))
-        self.end_headers()
-        self.wfile.write(resp)
+        try:
+            self.end_headers()
+            self.wfile.write(resp)
+        except (BrokenPipeError, ConnectionResetError):
+            # Client (MV3 service worker) timed out and closed the connection
+            # while we were still writing. gdl downloads take >30s.
+            pass
 
     def do_OPTIONS(self):
         """Handle CORS preflight requests."""
         self._respond(204, {})
+
+    def handle(self):
+        """Override to swallow BrokenPipeError at the request level."""
+        try:
+            super().handle()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
 
     def log_message(self, fmt, *args):
         # Silence default stderr logging
