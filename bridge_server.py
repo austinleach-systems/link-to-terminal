@@ -131,9 +131,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         resp = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Length", str(len(resp)))
         self.end_headers()
         self.wfile.write(resp)
+
+    def do_OPTIONS(self):
+        """Handle CORS preflight requests."""
+        self._respond(204, {})
 
     def log_message(self, fmt, *args):
         # Silence default stderr logging

@@ -38,12 +38,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== "send_to_hermes") return;
 
   const url = info.linkUrl;
+  console.log("[Hermes] Menu clicked, URL:", url);
 
   // Read the configured gateway or fall back to default
   const stored = (await chrome.storage.local.get(GATEWAY_URL_KEY))[GATEWAY_URL_KEY];
   const gateway = stored || DEFAULT_GATEWAY;
+  console.log("[Hermes] Gateway URL:", gateway);
 
   try {
+    console.log("[Hermes] Sending POST request...");
     const resp = await fetch(gateway, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -53,8 +56,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (!resp.ok) {
       throw new Error(`Server returned ${resp.status}`);
     }
+    console.log("[Hermes] Got response status:", resp.status);
 
     const data = await resp.json();
+    console.log("[Hermes] Server reply:", data);
+
     // Show a brief popup status via the extension icon badge (Chrome MV3 lets use alarms)
     chrome.action.setBadgeText({ text: "✓", tabId: tab.id });
     chrome.action.setBadgeBackgroundColor({ color: "#4caf50", tabId: tab.id });
@@ -62,6 +68,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     // Clear badge after 2 seconds
     chrome.alarms.create("clearBadge" + tab.id, { when: Date.now() + 2000 });
   } catch (err) {
+    console.error("[Hermes] Request failed:", err);
     chrome.action.setBadgeText({ text: "✗", tabId: tab.id });
     chrome.action.setBadgeBackgroundColor({ color: "#f44336", tabId: tab.id });
 
@@ -71,11 +78,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         type: "basic",
         title: "Hermes Link Bridge",
         message: `Could not reach server: ${err.message}. Is the bridge running?`,
-        iconUrl: "icons/icon48.png",
       });
-    } catch (_) {
-      // Notifications API might not be available
-    }
+    } catch (_) {}
 
     chrome.alarms.create("clearBadge" + tab.id, { when: Date.now() + 3000 });
   }
