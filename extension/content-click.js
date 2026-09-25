@@ -49,6 +49,9 @@
     handledSet.add(id);
     lastY = Math.min(e.clientY + 8, window.innerHeight - 50);
 
+    // Tell background to kill the new window Mac will open for this URL
+    chrome.runtime.sendMessage({type:"shift-clicked", url:hrefInfo.href}).catch(() => {});
+
     chrome.storage.local.get("gateway_url", function (o) {
       var gw = o.gateway_url || "http://127.0.0.1:6380";
       show("📡 sending...", "(" + hrefInfo.type + ")");

@@ -1,9 +1,8 @@
-// Service worker — handles right-click context menu clicks
+// Service worker — context menu + Mac Shift+Option new-window killer
 const GATEWAY_URL_KEY = "hermes_gateway_url";
 const DEFAULT_GATEWAY = "http://127.0.0.1:6380";
 
 function createContextMenu() {
-  // Remove any stale menus before recreating (prevents duplicates on reload)
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: "send_to_hermes",
@@ -13,74 +12,36 @@ function createContextMenu() {
   });
 }
 
-// Create the context menu whenever the service worker activates (MV3)
 chrome.runtime.onStartup.addListener(createContextMenu);
-
-// Also on install/update — covers first load only
 chrome.runtime.onInstalled.addListener(() => {
-  // Delay slightly so MV3 scheduler can finish booting
   setTimeout(createContextMenu, 1000);
 });
-
-// Re-create after any wake-up (MV3 service workers sleep and wake)
 chrome.alarms.create("wakeUp", { when: Date.now() + 500 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "wakeUp") {
-    createContextMenu();
-  }
+  if (alarm.name === "wakeUp") { createContextMenu(); }
 });
-
-// Keep service worker alive so menus stay registered
 setInterval(() => {}, 60000);
 
-// When the user selects our menu item
+// Context menu handler
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== "send_to_hermes") return;
-
   const url = info.linkUrl;
-  console.log("[Hermes] Menu clicked, URL:", url);
-
-  // Read the configured gateway or fall back to default
   const stored = (await chrome.storage.local.get(GATEWAY_URL_KEY))[GATEWAY_URL_KEY];
   const gateway = stored || DEFAULT_GATEWAY;
-  console.log("[Hermes] Gateway URL:", gateway);
-
   try {
-    console.log("[Hermes] Sending POST request...");
     const resp = await fetch(gateway, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
     });
-
-    if (!resp.ok) {
-      throw new Error(`Server returned ${resp.status}`);
-    }
-    console.log("[Hermes] Got response status:", resp.status);
-
-    const data = await resp.json();
-    console.log("[Hermes] Server reply:", data);
-
-    // Show a brief popup status via the extension icon badge (Chrome MV3 lets use alarms)
-    chrome.action.setBadgeText({ text: "✓", tabId: tab.id });
+    if (!resp.ok) throw new Error("Server returned " + resp.status);
+    chrome.action.setBadgeText({ text: "\u2713", tabId: tab.id });
     chrome.action.setBadgeBackgroundColor({ color: "#4caf50", tabId: tab.id });
-
-    // Clear badge after 2 seconds
     chrome.alarms.create("clearBadge" + tab.id, { when: Date.now() + 2000 });
   } catch (err) {
-    console.error("[Hermes] Request failed:", err);
-    chrome.action.setBadgeText({ text: "✗", tabId: tab.id });
+    chrome.action.setBadgeText({ text: "\u2717", tabId: tab.id });
     chrome.action.setBadgeBackgroundColor({ color: "#f44336", tabId: tab.id });
-
-    // Try to show an error notification if possible
-    try {
-      chrome.notifications?.create({
-        type: "basic",
-        title: "Hermes Link Bridge",
-        message: `Could not reach server: ${err.message}. Is the bridge running?`,
-      });
-    } catch (_) {}
-
+    try { chrome.notifications?.create({ type: "basic", title: "Hermes Link Bridge", message: "Server error: " + err.message }); } catch (_) {}
     chrome.alarms.create("clearBadge" + tab.id, { when: Date.now() + 3000 });
   }
 });
@@ -90,5 +51,23 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name.startsWith("clearBadge")) {
     const tabId = parseInt(alarm.name.replace("clearBadge", ""), 10);
     chrome.action.setBadgeText({ text: "", tabId });
+  }
+});
+
+// ── Mac Shift+Option new-window killer (URL-matched, not blanket) ───
+let pendingUrlToKill = null;
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === "shift-clicked") {
+    pendingUrlToKill = msg.url.toLowerCase().trim();
+    setTimeout(() => { pendingUrlToKill = null; }, 3000);
+  }
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (!pendingUrlToKill || !changeInfo.url) return;
+  const url = changeInfo.url.toLowerCase().trim();
+  if (url === pendingUrlToKill) {
+    chrome.tabs.remove(tabId);
   }
 });
