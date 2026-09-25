@@ -1,66 +1,27 @@
-// ── Modifier-click content script ────────────────────────────────
+// ── Modifier-click content script (diagnostic mode) ───────────────
 (function () {
   let toastEl = null;
   let lastY = 16;
-  // Track which events we've already handled to double-sent only once
   var handledSet = new Set();
 
   function rm() { if (toastEl) { toastEl.remove(); toastEl = null; } }
   function show(txt, sub, ok) {
     rm(); toastEl = document.createElement("div");
-    toastEl.style.cssText = "position:fixed;z-index:2147483647;padding:4px 10px;border-radius:4px;font:bold 12px system-sans-serif;pointer-events:none;box-shadow:0 2px 6px #0005;left:12px;top:" + lastY + "px;background:" + (ok ? "#34d399" : ok===null?"#fbbf24":"#f87171") + "88;color:#fff";
+    toastEl.style.cssText = "position:fixed;z-index:2147483647;padding:8px 14px;border-radius:6px;font:bold 14px system-sans-serif;pointer-events:none;box-shadow:0 2px 8px #0005;left:12px;top:" + lastY + "px;background:" + (ok ? "#34d399" : ok===null?"#fbbf24":"#ef4444") + ";color:#fff;border:2px solid white;";
     toastEl.textContent = txt;
-    if (sub) { const s = document.createElement("span"); s.style.fontWeight = "normal"; s.style.opacity = ".7"; s.textContent = " " + sub; toastEl.appendChild(s); }
-    document.body.appendChild(toastEl); setTimeout(rm, ok ? 900 : 2500);
+    if (sub) { const s = document.createElement("span"); s.style.fontWeight = "normal"; s.style.opacity = ".8"; s.textContent = " — " + sub; toastEl.appendChild(s); }
+    document.body.appendChild(toastEl); setTimeout(rm, ok ? 1500 : 3000);
   }
 
   function getHref(el) {
     if (!el) return null;
-    // Check link first
     var a = el.closest && el.closest('a[href]');
     if (a && a.href) return { href: a.href, type: 'link' };
-    // Check image
     var img = null;
     if (el.closest) img = el.closest('img');
     if (!img && el.tagName === 'IMG') img = el;
     if (img && img.src) return { href: img.src, type: 'image' };
     return null;
-  }
-
-  function modifiersMatch(e) {
-    return e.shiftKey && e.altKey && !e.metaKey && !e.ctrlKey;
-  }
-
-  function handleEl(e, eventType) {
-    if (!modifiersMatch(e)) return false;
-
-    // Don't double-fire for same target on mousedown+click
-    var id = e.target.id || (e.target.outerHTML.slice(0,20) + e.timeStamp);
-    if (handledSet.has(id)) {
-      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-      return true; // already handled by other event type
-    }
-
-    stopEvent(e);
-
-    var info = getHref(e.target);
-    if (!info) {
-      show("no link/image", "Shift+Option OK", null);
-      return false;
-    }
-
-    lastY = Math.min(e.clientY + 8, window.innerHeight - 40);
-    handledSet.add(id);
-    // Clean up old IDs after a second to avoid memory grow
-    setTimeout(function() { var _ = handledSet.delete(id); }, 1200);
-
-    chrome.storage.local.get("gateway_url", function (o) {
-      var gw = o.gateway_url || "http://127.0.0.1:6380";
-      fetch(gw, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:info.href})})
-        .then(function(r){return r.json();}).then(function(d){show("sent ✓ ("+info.type+")",d.status==="queued"?"#"+d.queue_position:"",true);})
-        .catch(function(err){show("fetch failed","check server",false);});
-    });
-    return true;
   }
 
   function stopEvent(e) {
@@ -69,9 +30,70 @@
     e.stopImmediatePropagation();
   }
 
-  // mousedown blocks the initial action (Mac's shift-click opens new window on click phase)
-  document.addEventListener("mousedown", function(e){ handleEl(e, "mousedown"); }, true);
-  // click catches anything that slipped through
-  document.addEventListener("click", function(e){ handleEl(e, "click"); }, true);
+  // ── mousedown ───────────────────────────────────────────────────────────────
+  document.addEventListener("mousedown", function (e) {
+    var mods = [];
+    if (e.shiftKey) mods.push("Shift");
+    if (e.altKey) mods.push("Option/Alt");
+    if (e.metaKey) mods.push("Cmd/Meta");
+    if (e.ctrlKey) mods.push("Ctrl");
+
+    // Show a diagnostic toast no matter what, so we know mousedown fired at all
+    lastY = Math.min(e.clientY + 8, window.innerHeight - 50);
+
+    if (!e.shiftKey || !e.altKey) {
+      show("❌ wrong keys", mods.length ? mods.join("+") : "nothing pressed");
+      return; // not our combo
+    }
+    if (e.metaKey || e.ctrlKey) {
+      stopEvent(e);
+      show("❌ extra key blocking", mods.join("+") + " — release Cmd/Ctrl");
+      return;
+    }
+
+    var hrefInfo = getHref(e.target);
+    if (!hrefInfo) {
+      stopEvent(e);
+      show("❌ no link/img here", "click the element itself");
+      return;
+    }
+
+    // Dedup guard
+    var id = e.target.outerHTML.slice(0,40) + "-" + e.timeStamp;
+    if (handledSet.has(id)) {
+      stopEvent(e);
+      return;
+    }
+
+    stopEvent(e);
+    handledSet.add(id);
+
+    // Send it
+    chrome.storage.local.get("gateway_url", function (o) {
+      var gw = o.gateway_url || "http://127.0.0.1:6380";
+      show("📡 sending...", "(" + hrefInfo.type + ")");
+      fetch(gw, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:hrefInfo.href})})
+        .then(function(r){return r.json();}).then(function(d){show("✅ sent ("+hrefInfo.type+")",d.status==="queued"?"#"+d.queue_position:"direct",true);})
+        .catch(function(){show("❌ fetch failed","is bridge running on :6380?",false);});
+    });
+
+  }, true);
+
+  // ── click ───────────────────────────────────────────────────────────────────
+  document.addEventListener("click", function (e) {
+    var mods = [];
+    if (e.shiftKey) mods.push("Shift");
+    if (e.altKey) mods.push("Option/Alt");
+    if (e.metaKey) mods.push("Cmd/Meta");
+    if (e.ctrlKey) mods.push("Ctrl");
+
+    if (!e.shiftKey || !e.altKey) return; // only care about our combo reaching click
+
+    stopEvent(e);
+    lastY = Math.min(e.clientY + 8, window.innerHeight - 50);
+    show("🖱️ click leaked through (mousedown failed)", mods.join("+") + " — Brave is intercepting");
+
+  }, true);
 
 })();
+
