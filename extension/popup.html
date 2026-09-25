@@ -4,12 +4,13 @@
 <meta charset="utf-8" />
 <title>Hermes — Active Processes</title>
 <style>
-  body { font: 12px/1.4 system-ui,sans-serif; margin:0; padding:10px 12px; min-width:300px; }
+  body { font: 12px/1.4 system-ui,sans-serif; margin:0; padding:10px 12px; min-width:380px; max-width:600px; }
   h1   { font-size:14px; margin:2px 0 8px; }
   .bar  { display:flex; align-items:center; gap:6px; padding:3px 0; border-bottom:1px solid #eee; }
   .dot  { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
   .run  { background:#4c8; }       .done { background:#8c6; }    .err  { background:#e55; }
-  .url  { max-width:230px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:#3182ce; }
+  .url  { color:#3182ce; cursor:pointer; word-break:break-all; white-space:normal; user-select:all; }
+  .url:hover { color:#69b0ff; }
   .meta { color:#666; font-size:11px; margin-left:auto; white-space:nowrap; }
   .empty{ padding:14px 0; text-align:center; color:#999; }
   button{background:#3b82f6;color:#fff;border:none;border-radius:4px;padding:5px 10px;cursor:pointer;font-size:11px}

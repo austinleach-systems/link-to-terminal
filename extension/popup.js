@@ -10,10 +10,6 @@ async function loadGateway() {
   return o[GATEWAY_KEY] || DEFAULT_URL;
 }
 
-function fmtURL(u) {
-  try { return new URL(u).hostname.split(".")[0].slice(0, 24); } catch(_) { return u.slice(0, 36); }
-}
-
 async function render() {
   const list = document.getElementById("list");
   if (!list) return;
@@ -53,17 +49,41 @@ async function render() {
 
     for (const item of groupItems) {
       const row = document.createElement("div");
+      const urlSpan = document.createElement("span");
+      urlSpan.className = "url";
+      urlSpan.textContent = item.url;
       if (item.status === "running") {
         row.className = "row";
-        row.innerHTML = '<span class="dot running"></span>' + fmtURL(item.url) + "<br><small>running " + (item.runtime || "") + "</small>";
+        const dot = document.createElement("span");
+        dot.className = "dot running";
+        row.appendChild(dot);
+        row.appendChild(urlSpan);
+        const info = document.createElement("br");
+        row.appendChild(info);
+        const small = document.createElement("small");
+        small.textContent = "running " + (item.runtime || "");
+        row.appendChild(small);
       } else if (item.status === "queued") {
         row.className = "row queued-row";
-        row.innerHTML = '<span class="dot queued"></span>#' + (item.queue_position || "?") + " " + fmtURL(item.url) + "<br><small>in queue</small>";
+        const dot = document.createElement("span");
+        dot.className = "dot queued";
+        row.appendChild(dot);
+        row.appendChild(urlSpan);
+        const info = document.createElement("br");
+        row.appendChild(info);
+        const small = document.createElement("small");
+        small.textContent = "#" + (item.queue_position || "?") + " in queue";
+        row.appendChild(small);
       } else { /* error */
         row.className = "row error";
+        row.appendChild(urlSpan);
         const t = item.promoted || item.started;
         const age = t ? Math.floor(Date.now()/1000 - Date.parse(t)) : "?";
-        row.innerHTML = '<span class="dot error"></span>' + fmtURL(item.url) + "<br><small>exit " + (item.exit_code ?? "?") + " · " + age + "s</small>";
+        const info = document.createElement("br");
+        row.appendChild(info);
+        const small = document.createElement("small");
+        small.textContent = "exit " + (item.exit_code ?? "?") + " · " + age + "s";
+        row.appendChild(small);
         const btn = document.createElement("button");
         btn.className = "retry-btn";
         btn.textContent = "↻ Retry";
