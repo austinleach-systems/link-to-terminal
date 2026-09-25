@@ -1,4 +1,4 @@
-// ── Modifier-click content script (diagnostic mode) ───────────────
+// ── Modifier-click content script v6.5.1 ──────────────────────────
 (function () {
   let toastEl = null;
   let lastY = 16;
@@ -66,14 +66,13 @@
     }
 
     stopEvent(e);
-    handledSet.add(id);
-
-    // Send it
+    handledSet.add(id);  // Dedup
+    chrome.runtime.sendMessage({type:"shift-clicked"}).catch(() => {}); // kill new tab on mac brave
     chrome.storage.local.get("gateway_url", function (o) {
       var gw = o.gateway_url || "http://127.0.0.1:6380";
       show("📡 sending...", "(" + hrefInfo.type + ")");
       fetch(gw, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:hrefInfo.href})})
-        .then(function(r){return r.json();}).then(function(d){show("✅ sent ("+hrefInfo.type+")",d.status==="queued"?"#"+d.queue_position:"direct",true);})
+        .then(function(r){return r.json();}).then(function(d){show("✅ sent ("+hrefInfo.type+")",d.status==="queued"?"#"+d.queue_position:"",true);})
         .catch(function(){show("❌ fetch failed","is bridge running on :6380?",false);});
     });
 
@@ -88,9 +87,6 @@
 
     stopEvent(e);
   }, true);
-
-  // Tell background script: Mac will open a new tab, kill it within its 2s window.
-  chrome.runtime.sendMessage({type:"shift-clicked"}).catch(() => {});
 
 })();
 

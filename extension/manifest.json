@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Hermes Link Bridge",
-  "version": "6.5.0",
+  "version": "6.5.2",
   "description": "Right-click any link to send its URL to a local terminal command via the Hermes bridge server.",
   "permissions": ["contextMenus", "alarms", "notifications", "storage", "activeTab"],
   "host_permissions": ["http://127.0.0.1:<port>/", "http://localhost:<port>/"],
