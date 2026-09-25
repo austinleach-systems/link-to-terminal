@@ -1,4 +1,4 @@
-// ── Modifier-click content script v6.5.1 ──────────────────────────
+// ── Modifier-click content script v6.5.3 (clean reset) ────────────
 (function () {
   let toastEl = null;
   let lastY = 16;
@@ -17,9 +17,9 @@
     if (!el) return null;
     var a = el.closest && el.closest('a[href]');
     if (a && a.href) return { href: a.href, type: 'link' };
-    var img = null;
-    if (el.closest) img = el.closest('img');
-    if (!img && el.tagName === 'IMG') img = el;
+    // Check image: try self first, then ancestors
+    if (el.tagName === 'IMG' && el.src) return { href: el.src, type: 'image' };
+    var img = el.closest && el.closest('img');
     if (img && img.src) return { href: img.src, type: 'image' };
     return null;
   }
@@ -30,44 +30,25 @@
     e.stopImmediatePropagation();
   }
 
-  // ── mousedown ───────────────────────────────────────────────────────────────
-  document.addEventListener("mousedown", function (e) {
+  function handleShiftOptionClick(e, eventType) {
     var mods = [];
     if (e.shiftKey) mods.push("Shift");
     if (e.altKey) mods.push("Option/Alt");
-    if (e.metaKey) mods.push("Cmd/Meta");
-    if (e.ctrlKey) mods.push("Ctrl");
 
-    // Show a diagnostic toast no matter what, so we know mousedown fired at all
-    lastY = Math.min(e.clientY + 8, window.innerHeight - 50);
-
-    if (!e.shiftKey || !e.altKey) {
-      show("❌ wrong keys", mods.length ? mods.join("+") : "nothing pressed");
-      return; // not our combo
-    }
-    if (e.metaKey || e.ctrlKey) {
-      stopEvent(e);
-      show("❌ extra key blocking", mods.join("+") + " — release Cmd/Ctrl");
-      return;
-    }
+    // Return silently if not our key combo — don't block anything else
+    if (!mods.includes("Shift") || !mods.includes("Option/Alt")) return;
+    if (e.metaKey || e.ctrlKey) { stopEvent(e); return; } // block but allow their default behavior
 
     var hrefInfo = getHref(e.target);
-    if (!hrefInfo) {
-      stopEvent(e);
-      show("❌ no link/img here", "click the element itself");
-      return;
-    }
+    if (!hrefInfo) return;
 
-    // Dedup guard
     var id = e.target.outerHTML.slice(0,40) + "-" + e.timeStamp;
-    if (handledSet.has(id)) {
-      stopEvent(e);
-      return;
-    }
+    if (handledSet.has(id)) { stopEvent(e); return; }
 
     stopEvent(e);
-    handledSet.add(id);  // Dedup
-    chrome.runtime.sendMessage({type:"shift-clicked"}).catch(() => {}); // kill new tab on mac brave
+    handledSet.add(id);
+    lastY = Math.min(e.clientY + 8, window.innerHeight - 50);
+
     chrome.storage.local.get("gateway_url", function (o) {
       var gw = o.gateway_url || "http://127.0.0.1:6380";
       show("📡 sending...", "(" + hrefInfo.type + ")");
@@ -75,18 +56,8 @@
         .then(function(r){return r.json();}).then(function(d){show("✅ sent ("+hrefInfo.type+")",d.status==="queued"?"#"+d.queue_position:"",true);})
         .catch(function(){show("❌ fetch failed","is bridge running on :6380?",false);});
     });
+  }
 
-  }, true);
-
-  // ── click fallback + new-window blocker ──────────────────────────
-  document.addEventListener("click", function (e) {
-    var mods = [];
-    if (e.shiftKey) mods.push("Shift");
-    if (e.altKey) mods.push("Option/Alt");
-    if (!e.shiftKey || !e.altKey) return;
-
-    stopEvent(e);
-  }, true);
-
+  document.addEventListener("mousedown", function(e){ handleShiftOptionClick(e, "mousedown"); }, true);
+  document.addEventListener("click", function(e){ handleShiftOptionClick(e, "click"); }, true);
 })();
-

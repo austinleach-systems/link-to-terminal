@@ -92,22 +92,3 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     chrome.action.setBadgeText({ text: "", tabId });
   }
 });
-
-// ── Mac Shift+Option new-tab blocker ───────────────────────────────
-let activeTabId = null;
-chrome.tabs.query({active:true,currentWindow:true}, t => { if (t[0]) activeTabId = t[0].id; });
-chrome.tabs.onActivated.addListener(info => { activeTabId = info.tabId; });
-
-let blockNewTabUntil = 0; // timestamp
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === "shift-clicked") {
-    blockNewTabUntil = Date.now() + 2000; // 2s window
-    return;
-  }
-});
-
-chrome.tabs.onCreated.addListener(tab => {
-  if (!tab.active || Date.now() < blockNewTabUntil) {
-    chrome.tabs.remove(tab.id);
-  }
-});
