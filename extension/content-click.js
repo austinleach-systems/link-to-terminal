@@ -11,13 +11,17 @@
   }
   show.lastY = 16;
 
-  document.addEventListener("click", function (e) {
+  function getHref(target) {
+    var a = target.closest ? target.closest('a[href]') : null;
+    if (a && a.href) return a.href;
+    if (target.tagName === 'IMG' && target.src) return target.src;
+    return null;
+  }
+
+  document.addEventListener("mousedown", function (e) {
     // Shift+Option only — no other modifiers allowed
     if (!e.shiftKey || !e.altKey || e.metaKey || e.ctrlKey) return;
-    var a = null, href = null;
-    if (e.target.closest) a = e.target.closest('a[href]');
-    if (a && a.href) href = a.href;
-    else if (e.target.tagName === 'IMG' && e.target.src) href = e.target.src;
+    var href = getHref(e.target);
     if (!href) return;
     e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
     show.lastY = Math.min(e.clientY + 8, window.innerHeight - 40);
@@ -25,7 +29,7 @@
       var gw = o.gateway_url || "http://127.0.0.1:6380";
       fetch(gw, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:href})})
         .then(function(r){return r.json();}).then(function(d){show("sent ✓",d.status==="queued"?"#"+d.queue_position:"",true);})
-        .catch(function(){show("⚠ unreachable","",false);});
+        .catch(function(){show("⚠ unresponsive","",false);});
     });
   }, true);
 })();
