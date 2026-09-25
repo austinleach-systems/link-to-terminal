@@ -34,13 +34,14 @@ COMMAND = os.environ.get(
 LOG_DIR = os.path.expanduser("~/.hermes/link_bridge")
 LOG_FILE = os.path.join(LOG_DIR, "links.log")
 
-# ── Per-origin FIFO executor ────────────────────────────────────────
+# ── Per-origin FIFO executor (up to 2 concurrent per origin) ───────
 import queue as _queue_mod
 from urllib.parse import urlparse
 
-_origin_queues: dict[str, _queue_mod.SimpleQueue] = {}        # origin → Queue
-_origin_workers: dict[str, threading.Thread]       = {}        # origin → daemon thread
-_origin_lock   = threading.Lock()                   # guards the dicts above
+_origin_queues: dict[str, _queue_mod.SimpleQueue]             = {}
+_origin_workers: dict[str, list[threading.Thread]]             = {}
+_origin_lock   = threading.Lock()
+_MAX_CONCURRENT_PER_ORIGIN = 2                                
 
 
 def _get_or_create_origin(url: str):
@@ -53,25 +54,30 @@ def _get_or_create_origin(url: str):
 
 
 def _ensure_worker(origin: str):
-    """If this origin has no worker thread+queue yet, create them."""
+    """If this origin has no workers yet, create 2 consumer threads sharing a queue."""
     with _origin_lock:
         if origin in _origin_queues:
             return           # already exists
         q       = _queue_mod.SimpleQueue()
         _origin_queues[origin] = q
-        t       = threading.Thread(
-            target=_origin_worker_loop, args=(origin, q), daemon=True)
-        _origin_workers[origin] = t
-        t.start()
-        print(f"  [worker started for {origin}]", flush=True)
+        threads = []
+        for i in range(_MAX_CONCURRENT_PER_ORIGIN):
+            t = threading.Thread(
+                target=_origin_worker_loop, args=(origin, q), daemon=True)
+            threads.append(t)
+            t.start()
+        _origin_workers[origin] = threads
+        print(f"  [workers started for {origin}]", flush=True)
 
 
 def _origin_worker_loop(origin: str, q: _queue_mod.SimpleQueue):
-    """Single-slot loop: pulls URLs from *this* origin's queue one at a time."""
+    """Pulls URLs from this origin's queue and processes them."""
     while True:
         url = q.get()   # blocks until a URL arrives
         try:
             handle_url(url)
+        except Exception as exc:
+            print(f"✘ Worker error for {url}: {exc}", flush=True)
         finally:
             pass
 

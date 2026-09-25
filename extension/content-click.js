@@ -14,13 +14,16 @@
   document.addEventListener("click", function (e) {
     // Shift+Option only — no other modifiers allowed
     if (!e.shiftKey || !e.altKey || e.metaKey || e.ctrlKey) return;
-    var a = e.target.closest ? e.target.closest('a[href]') : null;
-    if (!a || !a.href) return;
+    var a = null, href = null;
+    if (e.target.closest) a = e.target.closest('a[href]');
+    if (a && a.href) href = a.href;
+    else if (e.target.tagName === 'IMG' && e.target.src) href = e.target.src;
+    if (!href) return;
     e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
     show.lastY = Math.min(e.clientY + 8, window.innerHeight - 40);
     chrome.storage.local.get("gateway_url", function (o) {
       var gw = o.gateway_url || "http://127.0.0.1:6380";
-      fetch(gw, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:a.href})})
+      fetch(gw, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:href})})
         .then(function(r){return r.json();}).then(function(d){show("sent ✓",d.status==="queued"?"#"+d.queue_position:"",true);})
         .catch(function(){show("⚠ unreachable","",false);});
     });
