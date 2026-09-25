@@ -1,4 +1,4 @@
-// ── Modifier-click content script v6.5.3 (clean reset) ────────────
+// ── Modifier-click content script (diagnostic mode) ───────────────
 (function () {
   let toastEl = null;
   let lastY = 16;
@@ -17,9 +17,9 @@
     if (!el) return null;
     var a = el.closest && el.closest('a[href]');
     if (a && a.href) return { href: a.href, type: 'link' };
-    // Check image: try self first, then ancestors
-    if (el.tagName === 'IMG' && el.src) return { href: el.src, type: 'image' };
-    var img = el.closest && el.closest('img');
+    var img = null;
+    if (el.closest) img = el.closest('img');
+    if (!img && el.tagName === 'IMG') img = el;
     if (img && img.src) return { href: img.src, type: 'image' };
     return null;
   }
@@ -30,37 +30,70 @@
     e.stopImmediatePropagation();
   }
 
-  function handleShiftOptionClick(e, eventType) {
+  // ── mousedown ───────────────────────────────────────────────────────────────
+  document.addEventListener("mousedown", function (e) {
     var mods = [];
     if (e.shiftKey) mods.push("Shift");
     if (e.altKey) mods.push("Option/Alt");
+    if (e.metaKey) mods.push("Cmd/Meta");
+    if (e.ctrlKey) mods.push("Ctrl");
 
-    // Return silently if not our key combo — don't block anything else
-    if (!mods.includes("Shift") || !mods.includes("Option/Alt")) return;
-    if (e.metaKey || e.ctrlKey) { stopEvent(e); return; } // block but allow their default behavior
+    // Show a diagnostic toast no matter what, so we know mousedown fired at all
+    lastY = Math.min(e.clientY + 8, window.innerHeight - 50);
+
+    if (!e.shiftKey || !e.altKey) {
+      show("❌ wrong keys", mods.length ? mods.join("+") : "nothing pressed");
+      return; // not our combo
+    }
+    if (e.metaKey || e.ctrlKey) {
+      stopEvent(e);
+      show("❌ extra key blocking", mods.join("+") + " — release Cmd/Ctrl");
+      return;
+    }
 
     var hrefInfo = getHref(e.target);
-    if (!hrefInfo) return;
+    if (!hrefInfo) {
+      stopEvent(e);
+      show("❌ no link/img here", "click the element itself");
+      return;
+    }
 
+    // Dedup guard
     var id = e.target.outerHTML.slice(0,40) + "-" + e.timeStamp;
-    if (handledSet.has(id)) { stopEvent(e); return; }
+    if (handledSet.has(id)) {
+      stopEvent(e);
+      return;
+    }
 
     stopEvent(e);
     handledSet.add(id);
-    lastY = Math.min(e.clientY + 8, window.innerHeight - 50);
 
-    // Tell background to kill the new window Mac will open for this URL
-    chrome.runtime.sendMessage({type:"shift-clicked", url:hrefInfo.href}).catch(() => {});
-
+    // Send it
     chrome.storage.local.get("gateway_url", function (o) {
       var gw = o.gateway_url || "http://127.0.0.1:6380";
       show("📡 sending...", "(" + hrefInfo.type + ")");
       fetch(gw, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:hrefInfo.href})})
-        .then(function(r){return r.json();}).then(function(d){show("✅ sent ("+hrefInfo.type+")",d.status==="queued"?"#"+d.queue_position:"",true);})
+        .then(function(r){return r.json();}).then(function(d){show("✅ sent ("+hrefInfo.type+")",d.status==="queued"?"#"+d.queue_position:"direct",true);})
         .catch(function(){show("❌ fetch failed","is bridge running on :6380?",false);});
     });
-  }
 
-  document.addEventListener("mousedown", function(e){ handleShiftOptionClick(e, "mousedown"); }, true);
-  document.addEventListener("click", function(e){ handleShiftOptionClick(e, "click"); }, true);
+  }, true);
+
+  // ── click ───────────────────────────────────────────────────────────────────
+  document.addEventListener("click", function (e) {
+    var mods = [];
+    if (e.shiftKey) mods.push("Shift");
+    if (e.altKey) mods.push("Option/Alt");
+    if (e.metaKey) mods.push("Cmd/Meta");
+    if (e.ctrlKey) mods.push("Ctrl");
+
+    if (!e.shiftKey || !e.altKey) return; // only care about our combo reaching click
+
+    stopEvent(e);
+    lastY = Math.min(e.clientY + 8, window.innerHeight - 50);
+    show("🖱️ click leaked through (mousedown failed)", mods.join("+") + " — Brave is intercepting");
+
+  }, true);
+
 })();
+
