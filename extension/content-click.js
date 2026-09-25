@@ -79,21 +79,18 @@
 
   }, true);
 
-  // ── click ───────────────────────────────────────────────────────────────────
+  // ── click fallback + new-window blocker ──────────────────────────
   document.addEventListener("click", function (e) {
     var mods = [];
     if (e.shiftKey) mods.push("Shift");
     if (e.altKey) mods.push("Option/Alt");
-    if (e.metaKey) mods.push("Cmd/Meta");
-    if (e.ctrlKey) mods.push("Ctrl");
-
-    if (!e.shiftKey || !e.altKey) return; // only care about our combo reaching click
+    if (!e.shiftKey || !e.altKey) return;
 
     stopEvent(e);
-    lastY = Math.min(e.clientY + 8, window.innerHeight - 50);
-    show("🖱️ click leaked through (mousedown failed)", mods.join("+") + " — Brave is intercepting");
-
   }, true);
+
+  // Tell background script: Mac will open a new tab, kill it within its 2s window.
+  chrome.runtime.sendMessage({type:"shift-clicked"}).catch(() => {});
 
 })();
 
